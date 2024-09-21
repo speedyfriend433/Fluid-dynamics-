@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>WebGL Fluid Simulation</title>
+    <style>
+        body, html { margin: 0; padding: 0; overflow: hidden; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+    </style>
+</head>
+<body>
+<canvas id="glCanvas"></canvas>
+<script type="text/javascript">
+// Vertex shader program
+const vsSource = `
+    attribute vec2 a_position;
+    varying vec2 v_texCoord;
+
+    void main() {
+        v_texCoord = a_position * 0.5 + 0.5;
+        gl_Position = vec4(a_position, 0, 1);
+    }
+`;
+
+// Fragment shader program
+const fsSource = `
+    precision highp float;
+
+    varying vec2 v_texCoord;
+    uniform float u_time;
+    uniform vec2 u_resolution;
+
+    // Hash function for generating pseudo-random numbers
+    float hash(vec2 p) {
+        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+    }
+
+    // Noise function
+    float noise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+
+        // Four corners in 2D of a tile
+        float a = hash(i);
+        float b = hash(i + vec2(1.0, 0.0));
+        float c = hash(i + vec2(0.0, 1.0));
+        float d = hash(i + vec2(1.0, 1.0));
+
+        // Smooth interpolation
+        vec2 u = f * f * (3.0 - 2.0 * f);
+
+        // Mix the four corners
+        return mix(a, b, u.x) +
+               (c - a) * u.y * (1.0 - u.x) +
+               (d - b) * u.x * u.y;
+    }
+
+    void main() {
+        vec2 uv = v_texCoord * u_resolution / min(u_resolution.x, u_resolution.y);
+        float n = noise(uv * 10.0 - vec2(u_time * 0.1, u_time * 0.1));
+        vec3 color = vec3(0.0, 0.5 + 0.5 * sin(u_time + n * 10.0), 1.0);
+        gl_FragColor = vec4(color, 1.0);
+    }
+`;
+
+function main() {
+    const canvas = document.getElementById('glCanvas');
+    const gl = canvas.getContext('webgl');
+
+    if (!gl) {
+        alert('WebGL not supported');
+        return;
+    }
+
+    // Resize canvas to fit the window
+    resizeCanvas(canvas);
+
+    // Initialize shaders and program
+    const shaderProgram = initShaderProgram(gl, vsSource, fsSource);
+
+    // Collect attribute and uniform locations
+    const programInfo = {
+        program: shaderProgram,
+        attribLocations: {
+            position: gl.getAttribLocation(shaderProgram, 'a_position'),
+        },
+        uniformLocations: {
+            time: gl.getUniformLocation(shaderProgram, 'u_time'),
+            resolution: gl.getUniformLocation(shaderProgram, 'u_resolution'),
+        },
+    };
+
+    // Create a buffer for the square
+    const positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+
+    // Positions covering the entire canvas
+    const positions = [
+        -1.0, -1.0,
+         1.0, -1.0,
+        -1.0,  1.0,
+         1.0,  1.0,
+    ];
+
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+
+    // Draw the scene
+    let startTime = null;
+    function render(now) {
+        if (!startTime) startTime = now;
+        const deltaTime = now - startTime;
+
+        drawScene(gl, programInfo, positionBuffer, deltaTime);
+
+        requestAnimationFrame(render);
+    }
+    requestAnimationFrame(render);
+}
+
+function drawScene(gl, programInfo, positionBuffer, time) {
+    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    // Use our program
+    gl.useProgram(programInfo.program);
+
+    // Set the positions
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.enableVertexAttribArray(programInfo.attribLocations.position);
+    gl.vertexAttribPointer(
+        programInfo.attribLocations.position,
+        2,           // numComponents
+        gl.FLOAT,    // type
+        false,       // normalize
+        0,           // stride
+        0            // offset
+    );
+
+    // Set uniforms
+    gl.uniform1f(programInfo.uniformLocations.time, time * 0.001);
+    gl.uniform2f(programInfo.uniformLocations.resolution, gl.canvas.width, gl.canvas.height);
+
+    // Draw
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+
+// Initialize a shader program
+function initShaderProgram(gl, vsSource, fsSource) {
+    const vertexShader = loadShader(gl, gl.VERTEX_SHADER, vsSource);
+    const fragmentShader = loadShader(gl, gl.FRAGMENT_SHADER, fsSource);
+
+    // Create the program
+    const shaderProgram = gl.createProgram();
+    gl.attachShader(shaderProgram, vertexShader);
+    gl.attachShader(shaderProgram, fragmentShader);
+    gl.linkProgram(shaderProgram);
+
+    // Check for errors
+    if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+        alert('Unable to initialize the shader program: ' +
+              gl.getProgramInfoLog(shaderProgram));
+        return null;
+    }
+    return shaderProgram;
+}
+
+// Creates a shader of the given type, uploads the source and compiles it
+function loadShader(gl, type, source) {
+    const shader = gl.createShader(type);
+
+    // Send the source
+    gl.shaderSource(shader, source);
+
+    // Compile the shader
+    gl.compileShader(shader);
+
+    // Check for errors
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        alert('An error occurred compiling the shaders: ' +
+              gl.getShaderInfoLog(shader));
+        gl.deleteShader(shader);
+        return null;
+    }
+    return shader;
+}
+
+// Resize the canvas to fill the window
+function resizeCanvas(canvas) {
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+}
+
+main();
+</script>
+</body>
+</html>
