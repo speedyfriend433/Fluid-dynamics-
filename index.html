@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>WebGL Fluid Simulation</title>
+    <title>Interactive WebGL Fluid Simulation</title>
     <style>
         body, html { margin: 0; padding: 0; overflow: hidden; }
         canvas { display: block; width: 100vw; height: 100vh; }
@@ -29,8 +29,9 @@ const fsSource = `
     varying vec2 v_texCoord;
     uniform float u_time;
     uniform vec2 u_resolution;
+    uniform vec2 u_mouse;
 
-    // Hash function for generating pseudo-random numbers
+    // Hash function for pseudo-random number generation
     float hash(vec2 p) {
         return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
     }
@@ -40,26 +41,41 @@ const fsSource = `
         vec2 i = floor(p);
         vec2 f = fract(p);
 
-        // Four corners in 2D of a tile
         float a = hash(i);
         float b = hash(i + vec2(1.0, 0.0));
         float c = hash(i + vec2(0.0, 1.0));
         float d = hash(i + vec2(1.0, 1.0));
 
-        // Smooth interpolation
         vec2 u = f * f * (3.0 - 2.0 * f);
 
-        // Mix the four corners
         return mix(a, b, u.x) +
                (c - a) * u.y * (1.0 - u.x) +
-               (d - b) * u.x * u.y;
+               (d - b - c + a) * u.x * u.y;
+    }
+
+    // Rainbow color function
+    vec3 getRainbowColor(float t) {
+        return clamp(abs(mod(t * vec3(1.0, 1.0, 1.0) + vec3(0.0, 0.33, 0.66), 1.0) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
     }
 
     void main() {
-        vec2 uv = v_texCoord * u_resolution / min(u_resolution.x, u_resolution.y);
-        float n = noise(uv * 10.0 - vec2(u_time * 0.1, u_time * 0.1));
-        vec3 color = vec3(0.0, 0.5 + 0.5 * sin(u_time + n * 10.0), 1.0);
-        gl_FragColor = vec4(color, 1.0);
+        vec2 uv = v_texCoord;
+        vec2 mouse = u_mouse / u_resolution;
+
+        // Calculate distance from mouse for interaction
+        float dist = distance(uv, mouse);
+
+        // Generate fluid effect
+        float n = noise(uv * 10.0 - vec2(u_time * 0.2));
+        float fluid = sin((n + u_time * 0.5 - dist * 5.0) * 10.0);
+
+        // Apply rainbow colors
+        vec3 color = getRainbowColor(fluid + u_time * 0.1);
+
+        // Add some water-like transparency effect
+        float alpha = smoothstep(0.4, 0.0, dist);
+
+        gl_FragColor = vec4(color * alpha, alpha);
     }
 `;
 
@@ -87,6 +103,7 @@ function main() {
         uniformLocations: {
             time: gl.getUniformLocation(shaderProgram, 'u_time'),
             resolution: gl.getUniformLocation(shaderProgram, 'u_resolution'),
+            mouse: gl.getUniformLocation(shaderProgram, 'u_mouse'),
         },
     };
 
@@ -104,20 +121,31 @@ function main() {
 
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
 
+    // Mouse position
+    let mouseX = 0;
+    let mouseY = 0;
+
+    // Event listener for mouse movement
+    canvas.addEventListener('mousemove', function(event) {
+        const rect = canvas.getBoundingClientRect();
+        mouseX = event.clientX - rect.left;
+        mouseY = canvas.height - (event.clientY - rect.top);
+    });
+
     // Draw the scene
     let startTime = null;
     function render(now) {
         if (!startTime) startTime = now;
         const deltaTime = now - startTime;
 
-        drawScene(gl, programInfo, positionBuffer, deltaTime);
+        drawScene(gl, programInfo, positionBuffer, deltaTime, mouseX, mouseY);
 
         requestAnimationFrame(render);
     }
     requestAnimationFrame(render);
 }
 
-function drawScene(gl, programInfo, positionBuffer, time) {
+function drawScene(gl, programInfo, positionBuffer, time, mouseX, mouseY) {
     gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
@@ -139,6 +167,7 @@ function drawScene(gl, programInfo, positionBuffer, time) {
     // Set uniforms
     gl.uniform1f(programInfo.uniformLocations.time, time * 0.001);
     gl.uniform2f(programInfo.uniformLocations.resolution, gl.canvas.width, gl.canvas.height);
+    gl.uniform2f(programInfo.uniformLocations.mouse, mouseX, mouseY);
 
     // Draw
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
