@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Interactive WebGL Fluid Simulation</title>
+    <title>Advanced Interactive WebGL Fluid Simulation</title>
     <style>
         body, html { margin: 0; padding: 0; overflow: hidden; }
         canvas { display: block; width: 100vw; height: 100vh; }
@@ -29,59 +29,48 @@ const fsSource = `
     varying vec2 v_texCoord;
     uniform float u_time;
     uniform vec2 u_resolution;
+    uniform sampler2D u_previousFrame;
     uniform vec2 u_mouse;
-
-    // Hash function for pseudo-random number generation
-    float hash(vec2 p) {
-        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-    }
-
-    // Noise function
-    float noise(vec2 p) {
-        vec2 i = floor(p);
-        vec2 f = fract(p);
-
-        float a = hash(i);
-        float b = hash(i + vec2(1.0, 0.0));
-        float c = hash(i + vec2(0.0, 1.0));
-        float d = hash(i + vec2(1.0, 1.0));
-
-        vec2 u = f * f * (3.0 - 2.0 * f);
-
-        return mix(a, b, u.x) +
-               (c - a) * u.y * (1.0 - u.x) +
-               (d - b - c + a) * u.x * u.y;
-    }
-
-    // Rainbow color function
-    vec3 getRainbowColor(float t) {
-        return clamp(abs(mod(t * vec3(1.0, 1.0, 1.0) + vec3(0.0, 0.33, 0.66), 1.0) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
-    }
+    uniform float u_mouseDown;
 
     void main() {
         vec2 uv = v_texCoord;
         vec2 mouse = u_mouse / u_resolution;
 
-        // Calculate distance from mouse for interaction
+        // Calculate the distance from the current pixel to the mouse position
         float dist = distance(uv, mouse);
 
-        // Generate fluid effect
-        float n = noise(uv * 10.0 - vec2(u_time * 0.2));
-        float fluid = sin((n + u_time * 0.5 - dist * 5.0) * 10.0);
+        // Retrieve the previous frame's color
+        vec4 prevColor = texture2D(u_previousFrame, uv);
 
-        // Apply rainbow colors
-        vec3 color = getRainbowColor(fluid + u_time * 0.1);
+        // Compute the new color based on mouse interaction
+        vec3 color = prevColor.rgb;
 
-        // Add some water-like transparency effect
-        float alpha = smoothstep(0.4, 0.0, dist);
+        if (u_mouseDown > 0.5) {
+            // When the mouse is down, mix colors at the mouse position
+            float influence = exp(-dist * 1000.0);
+            vec3 newColor = vec3(sin(u_time * 5.0), cos(u_time * 3.0), sin(u_time * 2.0));
+            color = mix(color, newColor, influence);
+        } else {
+            // Slightly fade the colors over time
+            color *= 0.99;
+        }
 
-        gl_FragColor = vec4(color * alpha, alpha);
+        // Add some fluid-like distortion
+        float angle = sin(dist * 50.0 - u_time * 2.0) * 0.1;
+        vec2 offset = vec2(cos(angle), sin(angle)) * 0.001;
+        vec3 distortedColor = texture2D(u_previousFrame, uv + offset).rgb;
+
+        // Combine the distorted color with the current color
+        color = mix(color, distortedColor, 0.5);
+
+        gl_FragColor = vec4(color, 1.0);
     }
 `;
 
 function main() {
     const canvas = document.getElementById('glCanvas');
-    const gl = canvas.getContext('webgl');
+    const gl = canvas.getContext('webgl', { preserveDrawingBuffer: true });
 
     if (!gl) {
         alert('WebGL not supported');
@@ -103,7 +92,9 @@ function main() {
         uniformLocations: {
             time: gl.getUniformLocation(shaderProgram, 'u_time'),
             resolution: gl.getUniformLocation(shaderProgram, 'u_resolution'),
+            previousFrame: gl.getUniformLocation(shaderProgram, 'u_previousFrame'),
             mouse: gl.getUniformLocation(shaderProgram, 'u_mouse'),
+            mouseDown: gl.getUniformLocation(shaderProgram, 'u_mouseDown'),
         },
     };
 
@@ -121,16 +112,63 @@ function main() {
 
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
 
-    // Mouse position
+    // Create a texture to store the previous frame
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+
+    // Initialize the texture with empty data
+    gl.texImage2D(
+        gl.TEXTURE_2D, 0, gl.RGBA, gl.canvas.width, gl.canvas.height, 0,
+        gl.RGBA, gl.UNSIGNED_BYTE, null
+    );
+
+    // Set texture parameters
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+
+    // Mouse interaction variables
     let mouseX = 0;
     let mouseY = 0;
+    let mouseDown = false;
 
-    // Event listener for mouse movement
-    canvas.addEventListener('mousemove', function(event) {
+    // Event listeners for mouse and touch input
+    function updateMousePosition(event) {
         const rect = canvas.getBoundingClientRect();
         mouseX = event.clientX - rect.left;
         mouseY = canvas.height - (event.clientY - rect.top);
+    }
+
+    canvas.addEventListener('mousedown', function(event) {
+        mouseDown = true;
+        updateMousePosition(event);
     });
+
+    canvas.addEventListener('mouseup', function() {
+        mouseDown = false;
+    });
+
+    canvas.addEventListener('mousemove', function(event) {
+        if (mouseDown) {
+            updateMousePosition(event);
+        }
+    });
+
+    // Touch events for mobile devices
+    canvas.addEventListener('touchstart', function(event) {
+        mouseDown = true;
+        const touch = event.touches[0];
+        updateMousePosition(touch);
+        event.preventDefault();
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', function() {
+        mouseDown = false;
+    });
+
+    canvas.addEventListener('touchmove', function(event) {
+        const touch = event.touches[0];
+        updateMousePosition(touch);
+        event.preventDefault();
+    }, { passive: false });
 
     // Draw the scene
     let startTime = null;
@@ -138,16 +176,17 @@ function main() {
         if (!startTime) startTime = now;
         const deltaTime = now - startTime;
 
-        drawScene(gl, programInfo, positionBuffer, deltaTime, mouseX, mouseY);
+        drawScene(gl, programInfo, positionBuffer, deltaTime, mouseX, mouseY, mouseDown);
 
         requestAnimationFrame(render);
     }
     requestAnimationFrame(render);
 }
 
-function drawScene(gl, programInfo, positionBuffer, time, mouseX, mouseY) {
+function drawScene(gl, programInfo, positionBuffer, time, mouseX, mouseY, mouseDown) {
+    // Set the viewport and clear the canvas
     gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    // gl.clear(gl.COLOR_BUFFER_BIT);
 
     // Use our program
     gl.useProgram(programInfo.program);
@@ -168,9 +207,31 @@ function drawScene(gl, programInfo, positionBuffer, time, mouseX, mouseY) {
     gl.uniform1f(programInfo.uniformLocations.time, time * 0.001);
     gl.uniform2f(programInfo.uniformLocations.resolution, gl.canvas.width, gl.canvas.height);
     gl.uniform2f(programInfo.uniformLocations.mouse, mouseX, mouseY);
+    gl.uniform1f(programInfo.uniformLocations.mouseDown, mouseDown ? 1.0 : 0.0);
+
+    // Bind the previous frame texture
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, textureFromCanvas(gl));
+    gl.uniform1i(programInfo.uniformLocations.previousFrame, 0);
 
     // Draw
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+
+function textureFromCanvas(gl) {
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+
+    // Copy the current canvas to the texture
+    gl.copyTexImage2D(
+        gl.TEXTURE_2D, 0, gl.RGBA, 0, 0,
+        gl.canvas.width, gl.canvas.height, 0
+    );
+
+    // Set texture parameters
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+
+    return texture;
 }
 
 // Initialize a shader program
